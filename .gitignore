@@ -1,0 +1,16 @@
+# Python
+.venv*/
+__pycache__/
+
+# Data and media
+storage/
+*.db
+*.mp4
+*.mov
+*.mkv
+*.json
+*.vtt
+*.srt
+
+# Secrets
+.env

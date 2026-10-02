@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lecture library</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #E9EEEA; --ink: #17231E; --board: #1E3B32; --chalk: #E8EFE9;
+    --chalk-dim: #9DB5AA; --marker: #F4D35E; --muted: #4A5D55; --fail: #A33A2B;
+    --font: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.55 var(--font); }
+  header { background: var(--board); color: var(--chalk); padding: 2rem 1.5rem; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { margin: 0 0 1rem; font-size: 1.8rem; line-height: 1.2; }
+  .upload { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+  .upload input[type=file] { font: inherit; color: var(--chalk); max-width: 100%; }
+  button {
+    font: inherit; font-weight: 700; background: var(--marker); color: var(--ink);
+    border: 0; border-radius: 6px; padding: 0.55rem 1.1rem; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  button:focus-visible, a:focus-visible { outline: 3px solid var(--marker); outline-offset: 2px; }
+  #msg { color: var(--chalk-dim); margin: 0.75rem 0 0; min-height: 1.5em; }
+  main { padding: 1.5rem; }
+  h2 { font-size: 1.2rem; margin: 0 0 0.75rem; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li {
+    display: flex; justify-content: space-between; gap: 1rem; align-items: baseline;
+    padding: 0.85rem 0; border-bottom: 1px solid #C9D4CE;
+  }
+  .title { font-weight: 700; overflow-wrap: anywhere; }
+  .title a { color: var(--ink); }
+  .meta { color: var(--muted); font-size: 0.9rem; }
+  .status { white-space: nowrap; font-size: 0.95rem; color: var(--muted); }
+  .status.failed { color: var(--fail); font-weight: 700; }
+  .empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Lecture library</h1>
+    <form class="upload" id="form">
+      <input type="file" id="file" accept="video/*,audio/*" required aria-label="Lecture video file">
+      <button type="submit" id="btn">Upload lecture</button>
+    </form>
+    <p id="msg" aria-live="polite"></p>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <h2>Your lectures</h2>
+    <ul id="list"><li class="empty">Loading…</li></ul>
+  </div>
+</main>
+
+<script>
+  const list = document.getElementById("list");
+  const msg = document.getElementById("msg");
+  const btn = document.getElementById("btn");
+
+  const STATUS_TEXT = {
+    queued: "Waiting for a worker",
+    processing: "Transcribing…",
+    done: "Ready",
+    failed: "Failed",
+  };
+
+  function minutes(sec) { return sec ? `${(sec / 60).toFixed(1)} min` : ""; }
+
+  function escapeHtml(t) {
+    return String(t).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  async function refresh() {
+    try {
+      const lectures = await (await fetch("/lectures")).json();
+      if (!lectures.length) {
+        list.innerHTML = `<li class="empty">No lectures yet. Upload a video above to get started.</li>`;
+        return;
+      }
+      list.innerHTML = lectures.map(l => {
+        const title = escapeHtml(l.title);
+        const name = l.status === "done" ? `<a href="player.html?id=${l.id}">${title}</a>` : title;
+        let meta = "";
+        if (l.status === "done") {
+          meta = `${minutes(l.duration_sec)} lecture, transcribed in ${minutes(l.processing_sec)}`;
+        } else if (l.status === "failed") {
+          meta = escapeHtml(l.error || "Unknown error");
+        }
+        return `<li>
+          <div><div class="title">${name}</div><div class="meta">${meta}</div></div>
+          <div class="status ${l.status}">${STATUS_TEXT[l.status] || l.status}</div>
+        </li>`;
+      }).join("");
+    } catch {
+      list.innerHTML = `<li class="empty">Can't reach the API. Make sure uvicorn is running.</li>`;
+    }
+  }
+
+  document.getElementById("form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const file = document.getElementById("file").files[0];
+    if (!file) return;
+    const data = new FormData();
+    data.append("file", file);
+    btn.disabled = true;
+    msg.textContent = `Uploading ${file.name}…`;
+    try {
+      const res = await fetch("/lectures", { method: "POST", body: data });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || res.status);
+      msg.textContent = `Uploaded. It's in the queue and will be transcribed shortly.`;
+      e.target.reset();
+      refresh();
+    } catch (err) {
+      msg.textContent = `Upload failed: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  refresh();
+  setInterval(refresh, 5000); // check for status changes every 5 seconds
+</script>
+</body>
+</html>

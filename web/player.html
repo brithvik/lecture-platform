@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lecture player</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #E9EEEA;      /* pale chalk-dust page */
+    --ink: #17231E;        /* main text */
+    --board: #1E3B32;      /* chalkboard green panel */
+    --chalk: #E8EFE9;      /* text on the board */
+    --chalk-dim: #9DB5AA;  /* timestamps, secondary text */
+    --marker: #F4D35E;     /* highlighter for the current line */
+    --font: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper); color: var(--ink); font: 17px/1.55 var(--font);
+    display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+  }
+  main { padding: 2rem; display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+  h1 { font-size: 1.6rem; line-height: 1.2; margin: 0; font-weight: 700; }
+  video { width: 100%; background: #000; border-radius: 6px; }
+  .hint { color: #4A5D55; margin: 0; max-width: 60ch; }
+
+  aside {
+    background: var(--board); color: var(--chalk);
+    display: flex; flex-direction: column; height: 100vh; position: sticky; top: 0;
+  }
+  .search { padding: 1.25rem 1.25rem 0.75rem; }
+  .search label { display: block; font-weight: 700; margin-bottom: 0.4rem; }
+  .search input {
+    width: 100%; font: inherit; padding: 0.55rem 0.75rem; border-radius: 6px;
+    border: 2px solid transparent; background: #F4F7F5; color: var(--ink);
+  }
+  .search input:focus { outline: none; border-color: var(--marker); }
+  .count { color: var(--chalk-dim); font-size: 0.9rem; margin-top: 0.4rem; min-height: 1.3em; }
+
+  #lines { list-style: none; margin: 0; padding: 0 0.75rem 2rem; overflow-y: auto; flex: 1; }
+  #lines button {
+    display: grid; grid-template-columns: 4.5rem 1fr; gap: 0.5rem; width: 100%;
+    text-align: left; font: inherit; color: inherit; background: none; border: 0;
+    padding: 0.45rem 0.5rem; border-radius: 4px; cursor: pointer; position: relative;
+  }
+  #lines button:hover { background: rgba(232, 239, 233, 0.08); }
+  #lines button:focus-visible { outline: 2px solid var(--marker); outline-offset: 1px; }
+  .time { color: var(--chalk-dim); font-variant-numeric: tabular-nums; font-size: 0.9rem; padding-top: 0.1rem; }
+
+  /* The highlighter sweep on the line being spoken */
+  #lines button::before {
+    content: ""; position: absolute; inset: 0; border-radius: 4px; background: var(--marker);
+    transform: scaleX(0); transform-origin: left; transition: transform 0.35s ease-out; z-index: 0;
+  }
+  #lines button > * { position: relative; z-index: 1; }
+  #lines button.active::before { transform: scaleX(1); }
+  #lines button.active, #lines button.active .time { color: var(--ink); }
+  mark { background: var(--marker); color: var(--ink); border-radius: 2px; padding: 0 1px; }
+
+  .error { background: #FFF4D6; border-left: 4px solid #C9A227; padding: 0.75rem 1rem; max-width: 60ch; }
+
+  @media (max-width: 800px) {
+    body { grid-template-columns: 1fr; }
+    main { padding: 1rem; }
+    aside { height: 60vh; position: static; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #lines button::before { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <a href="/" style="color:#4A5D55">Back to the library</a>
+  <h1 id="title">Lecture</h1>
+  <video id="video" controls preload="metadata"></video>
+  <p class="hint">Click any line in the transcript to jump to that moment. Search finds every place a word was said.</p>
+  <div id="error" class="error" hidden></div>
+</main>
+
+<aside>
+  <div class="search">
+    <label for="q">Search this lecture</label>
+    <input id="q" type="search" placeholder="Try &quot;variable&quot; or &quot;computation&quot;" autocomplete="off">
+    <div class="count" id="count" aria-live="polite"></div>
+  </div>
+  <ul id="lines"></ul>
+</aside>
+
+<script>
+  // Which lecture to load: player.html?id=LECTURE_ID
+  const id = new URLSearchParams(location.search).get("id");
+  const video = document.getElementById("video");
+  const list = document.getElementById("lines");
+  const q = document.getElementById("q");
+  const count = document.getElementById("count");
+  let segments = [];
+  let buttons = [];
+  let activeIndex = -1;
+
+  video.src = `/lectures/${id}/video`;
+  fetch(`/lectures/${id}`)
+    .then(r => r.json())
+    .then(l => {
+      document.getElementById("title").textContent = l.title;
+      document.title = l.title + " | Lecture player";
+    });
+
+  // Build subtitles from the transcript (shows up in the video's captions menu)
+  function addSubtitles() {
+    const track = video.addTextTrack("subtitles", "English", "en");
+    segments.forEach(s => track.addCue(new VTTCue(s.start, s.end, s.text)));
+    track.mode = "hidden"; // off until the viewer turns captions on
+  }
+
+  function fmt(sec) {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+    const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+    return h ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+  }
+
+  function escapeHtml(t) {
+    return t.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function render() {
+    list.innerHTML = "";
+    buttons = segments.map((seg, i) => {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.innerHTML = `<span class="time">${fmt(seg.start)}</span><span class="text">${escapeHtml(seg.text)}</span>`;
+      b.addEventListener("click", () => { video.currentTime = seg.start; video.play(); });
+      li.appendChild(b);
+      list.appendChild(li);
+      return b;
+    });
+  }
+
+  // Find the segment playing at time t (binary search, since segments are in order)
+  function indexAt(t) {
+    let lo = 0, hi = segments.length - 1, found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (segments[mid].start <= t) { found = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return found;
+  }
+
+  video.addEventListener("timeupdate", () => {
+    const i = indexAt(video.currentTime);
+    if (i === activeIndex) return;
+    if (buttons[activeIndex]) buttons[activeIndex].classList.remove("active");
+    activeIndex = i;
+    const b = buttons[i];
+    if (b) {
+      b.classList.add("active");
+      if (b.parentElement.style.display !== "none") {
+        const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+        b.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "auto" });
+      }
+    }
+  });
+
+  q.addEventListener("input", () => {
+    const term = q.value.trim().toLowerCase();
+    let hits = 0;
+    segments.forEach((seg, i) => {
+      const li = buttons[i].parentElement;
+      const textEl = buttons[i].querySelector(".text");
+      if (!term) {
+        li.style.display = "";
+        textEl.innerHTML = escapeHtml(seg.text);
+        return;
+      }
+      const match = seg.text.toLowerCase().includes(term);
+      li.style.display = match ? "" : "none";
+      if (match) {
+        hits++;
+        const safe = escapeHtml(seg.text);
+        const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+        textEl.innerHTML = safe.replace(re, m => `<mark>${m}</mark>`);
+      }
+    });
+    count.textContent = term ? `${hits} ${hits === 1 ? "moment" : "moments"} found` : "";
+  });
+
+  fetch(`/lectures/${id}/segments`)
+    .then(async r => {
+      if (!r.ok) throw new Error((await r.json()).detail || r.status);
+      return r.json();
+    })
+    .then(data => { segments = data; render(); addSubtitles(); })
+    .catch(e => {
+      const err = document.getElementById("error");
+      err.hidden = false;
+      err.innerHTML = "";
+      err.append(`Couldn't load this lecture's transcript: ${e.message}. `);
+      const back = document.createElement("a");
+      back.href = "/";
+      back.textContent = "Back to the library";
+      err.append(back);
+    });
+</script>
+</body>
+</html>

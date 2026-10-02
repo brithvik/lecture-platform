@@ -1,0 +1,11 @@
+.venv*
+__pycache__
+.git
+storage
+*.db
+*.mp4
+*.mov
+*.mkv
+*.json
+*.vtt
+*.srt

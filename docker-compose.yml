@@ -1,0 +1,22 @@
+services:
+  api:
+    build: .
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - appdata:/data
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "worker.py"]
+    environment:
+      MODEL_SIZE: base    # tiny was slower overall (more re-decoding) and less accurate
+      CPU_THREADS: "4"    # more threads than physical cores slowed things down
+    volumes:
+      - appdata:/data   # same volume, so the worker can read uploaded videos and the database
+    restart: unless-stopped
+
+volumes:
+  appdata:

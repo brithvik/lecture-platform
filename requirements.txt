@@ -1,0 +1,6 @@
+--only-binary=av
+fastapi
+uvicorn
+python-multipart
+faster-whisper==1.2.1
+av==14.2.0
