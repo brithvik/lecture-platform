@@ -1,0 +1,52 @@
+# The API: accepts uploads, serves transcripts, video, and the web pages.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels: { app: api }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: api }
+  template:
+    metadata:
+      labels: { app: api }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: lecture-platform:dev
+          imagePullPolicy: IfNotPresent   # use the image loaded into kind, don't download
+          command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - { name: appdata, mountPath: /data }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          readinessProbe:            # only send traffic once the API answers
+            httpGet: { path: /lectures, port: 8000 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:             # restart the container if it stops answering
+            httpGet: { path: /lectures, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: appdata
+          persistentVolumeClaim: { claimName: appdata }
+---
+# A stable address for the API inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector: { app: api }
+  ports:
+    - port: 8000
+      targetPort: 8000
