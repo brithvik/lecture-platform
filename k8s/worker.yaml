@@ -1,4 +1,5 @@
 # The worker: transcribes queued lectures in the background.
+# No shared volume: it downloads each video from object storage, so it can run on any machine.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,24 +17,19 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
-        fsGroup: 1000
       containers:
         - name: worker
-          image: lecture-platform:v2
+          image: lecture-platform:v3
           imagePullPolicy: IfNotPresent
           command: ["python", "worker.py"]
           envFrom:
             - configMapRef: { name: app-config }
+            - secretRef: { name: storage-credentials }
           env:
             - { name: MODEL_SIZE, value: "base" }
             - { name: CPU_THREADS, value: "4" }
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: postgres-credentials, key: DATABASE_URL } }
-          volumeMounts:
-            - { name: appdata, mountPath: /data }
           resources:
             requests: { cpu: "1", memory: 1Gi }
             limits: { memory: 3Gi }   # stop one runaway job from eating all memory
-      volumes:
-        - name: appdata
-          persistentVolumeClaim: { claimName: appdata }

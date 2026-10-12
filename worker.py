@@ -11,13 +11,16 @@ PostgreSQL is the source of truth; Redis only delivers job IDs, so duplicates ar
 import os
 import signal
 import socket
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 from faster_whisper import WhisperModel
 
 import db
 import jobqueue
+import storage
 
 MODEL_SIZE = os.environ.get("MODEL_SIZE", "base")
 CPU_THREADS = int(os.environ.get("CPU_THREADS", os.cpu_count() or 4))
@@ -43,7 +46,7 @@ def claim(lecture_id):
             """UPDATE lectures
                SET status = 'processing', worker_id = %s, heartbeat_at = now(), attempts = attempts + 1
                WHERE id = %s AND status = 'queued'
-               RETURNING id, title, video_path, attempts""",
+               RETURNING id, title, video_key, attempts""",
             (WORKER_ID, lecture_id),
         ).fetchone()
 
@@ -112,10 +115,17 @@ def release_current_job(signum, frame):
 
 
 def process(model, job):
+    if not job["video_key"]:
+        raise RuntimeError("No video in storage (uploaded before the storage upgrade)")
     start = time.time()
-    segments, info = model.transcribe(job["video_path"], vad_filter=True)
-    rows = [(job["id"], i, round(s.start, 2), round(s.end, 2), s.text.strip())
-            for i, s in enumerate(segments)]
+    # Download to a private temporary folder, which is deleted automatically afterwards
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / Path(job["video_key"]).name
+        storage.download(job["video_key"], path)
+        downloaded = time.time() - start
+        segments, info = model.transcribe(str(path), vad_filter=True)
+        rows = [(job["id"], i, round(s.start, 2), round(s.end, 2), s.text.strip())
+                for i, s in enumerate(segments)]
     elapsed = time.time() - start
 
     with db.db() as c:
@@ -135,7 +145,7 @@ def process(model, job):
         log(f"Finished {job['id']}, but another worker had taken it over; discarding my result")
         return
     log(f"Done: {job['title']} | {len(rows)} segments | {info.duration / 60:.1f} min of audio "
-        f"in {elapsed / 60:.1f} min ({info.duration / elapsed:.1f}x real time)")
+        f"in {elapsed / 60:.1f} min ({info.duration / elapsed:.1f}x real time; download {downloaded:.1f}s)")
 
 
 def handle_failure(job, error):

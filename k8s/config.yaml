@@ -1,5 +1,5 @@
-# Settings shared by the app. The Secret holds passwords; the ConfigMap holds everything else.
-# (A plain Secret is fine for local development; we'll encrypt secrets properly before the cloud.)
+# Settings shared by the app. Secrets hold passwords and keys; the ConfigMap holds everything else.
+# (Plain Secrets are fine for local development; we'll encrypt secrets properly before the cloud.)
 apiVersion: v1
 kind: Secret
 metadata:
@@ -12,9 +12,19 @@ stringData:
   DATABASE_URL: postgresql://lecture:dev-only-password@postgres:5432/lecture
 ---
 apiVersion: v1
+kind: Secret
+metadata:
+  name: storage-credentials
+type: Opaque
+stringData:
+  S3_ACCESS_KEY: dev        # placeholders: local SeaweedFS doesn't check keys yet
+  S3_SECRET_KEY: dev
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: app-config
 data:
   REDIS_URL: redis://redis:6379/0
-  DATA_DIR: /data
+  S3_ENDPOINT: http://seaweedfs:8333
+  S3_BUCKET: lectures

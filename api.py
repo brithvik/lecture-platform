@@ -2,24 +2,25 @@
 The API: accepts uploads and serves lecture info, transcripts, video, and the web pages.
 Run:  uvicorn api:app --reload
 """
-import shutil
+import re
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import db
 import jobqueue
+import storage
 
-STORAGE = db.DATA_DIR / "storage"
-STORAGE.mkdir(exist_ok=True)
 ALLOWED = {".mp4", ".mov", ".mkv", ".webm", ".m4a", ".mp3", ".wav"}
 PUBLIC_FIELDS = "id, title, status, attempts, duration_sec, processing_sec, error"
+CHUNK = 256 * 1024
 
 app = FastAPI(title="Lecture API")
 db.init()
+storage.ensure_bucket()
 
 
 def get_lecture(c, lecture_id):
@@ -53,14 +54,13 @@ def upload_lecture(file: UploadFile = File(...)):
         raise HTTPException(400, f"Unsupported file type '{ext}'. Use one of: {', '.join(sorted(ALLOWED))}")
 
     lecture_id = uuid.uuid4().hex[:12]
-    path = STORAGE / f"{lecture_id}{ext}"
-    with open(path, "wb") as out:
-        shutil.copyfileobj(file.file, out)
+    key = f"videos/{lecture_id}{ext}"
+    storage.upload(file.file, key, file.content_type or "application/octet-stream")
 
     with db.db() as c:
         c.execute(
-            "INSERT INTO lectures (id, title, video_path) VALUES (%s, %s, %s)",
-            (lecture_id, Path(file.filename).stem, str(path)),
+            "INSERT INTO lectures (id, title, video_key) VALUES (%s, %s, %s)",
+            (lecture_id, Path(file.filename).stem, key),
         )
     try:
         jobqueue.enqueue(lecture_id)
@@ -97,10 +97,39 @@ def lecture_segments(lecture_id: str):
 
 
 @app.get("/lectures/{lecture_id}/video")
-def lecture_video(lecture_id: str):
+def lecture_video(lecture_id: str, request: Request):
+    """Stream the video from object storage. Supports range requests, which browsers use to
+    jump to the middle of a video without downloading all of it."""
     with db.db() as c:
         row = get_lecture(c, lecture_id)
-    return FileResponse(row["video_path"])
+    key = row.get("video_key")
+    if not key:
+        raise HTTPException(404, "This lecture's video was uploaded before the storage upgrade")
+
+    info = storage.head(key)
+    size = info["ContentLength"]
+    media_type = info.get("ContentType") or "video/mp4"
+    headers = {"Accept-Ranges": "bytes"}
+
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", request.headers.get("range", "").strip())
+    if not match or match.groups() == ("", ""):
+        obj = storage.get(key)
+        headers["Content-Length"] = str(size)
+        return StreamingResponse(obj["Body"].iter_chunks(CHUNK), media_type=media_type, headers=headers)
+
+    first, last = match.groups()
+    if first:
+        start, end = int(first), min(int(last), size - 1) if last else size - 1
+    else:  # "bytes=-500" means the last 500 bytes
+        start, end = max(size - int(last), 0), size - 1
+    if start >= size or start > end:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+
+    obj = storage.get(key, f"bytes={start}-{end}")
+    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    headers["Content-Length"] = str(end - start + 1)
+    return StreamingResponse(obj["Body"].iter_chunks(CHUNK), status_code=206,
+                             media_type=media_type, headers=headers)
 
 
 # Serve the web pages (library and player). Must stay at the bottom, after all API routes.

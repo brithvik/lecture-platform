@@ -1,0 +1,48 @@
+# SeaweedFS: S3-compatible object storage for uploaded videos.
+# A StatefulSet because it stores data and needs its own disk.
+# Local development only: no access keys yet, and it's only reachable from inside the cluster.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: seaweedfs
+spec:
+  serviceName: seaweedfs
+  replicas: 1
+  selector:
+    matchLabels: { app: seaweedfs }
+  template:
+    metadata:
+      labels: { app: seaweedfs }
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:latest   # TODO: pin to a specific release version
+          args: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-master.volumeSizeLimitMB=1024"]
+          ports:
+            - containerPort: 8333
+          volumeMounts:
+            - { name: objectdata, mountPath: /data }
+          readinessProbe:
+            tcpSocket: { port: 8333 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+  volumeClaimTemplates:
+    - metadata:
+        name: objectdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+spec:
+  selector: { app: seaweedfs }
+  ports:
+    - port: 8333

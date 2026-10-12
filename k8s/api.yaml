@@ -15,21 +15,19 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
-        fsGroup: 1000
       containers:
         - name: api
-          image: lecture-platform:v2
+          image: lecture-platform:v3
           imagePullPolicy: IfNotPresent   # use the image loaded into kind, don't download
           command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:
             - containerPort: 8000
           envFrom:
             - configMapRef: { name: app-config }
+            - secretRef: { name: storage-credentials }
           env:
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: postgres-credentials, key: DATABASE_URL } }
-          volumeMounts:
-            - { name: appdata, mountPath: /data }
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { memory: 512Mi }
@@ -41,9 +39,6 @@ spec:
             httpGet: { path: /healthz, port: 8000 }
             initialDelaySeconds: 10
             periodSeconds: 20
-      volumes:
-        - name: appdata
-          persistentVolumeClaim: { claimName: appdata }
 ---
 # A stable address for the API inside the cluster.
 apiVersion: v1

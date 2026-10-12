@@ -2,10 +2,12 @@
 x-app-env: &app-env
   DATABASE_URL: postgresql://lecture:lecture@postgres:5432/lecture
   REDIS_URL: redis://redis:6379/0
+  S3_ENDPOINT: http://seaweedfs:8333
+  S3_BUCKET: lectures
 
 services:
   postgres:
-    image: pgvector/pgvector:pg17   # PostgreSQL with the pgvector add-on we'll use for search
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: lecture
       POSTGRES_PASSWORD: lecture
@@ -19,7 +21,13 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]   # no persistence needed
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-master.volumeSizeLimitMB=1024"]
+    volumes:
+      - objectdata:/data
 
   api:
     build: .
@@ -27,11 +35,10 @@ services:
     environment: *app-env
     ports:
       - "8000:8000"
-    volumes:
-      - appdata:/data
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
+      seaweedfs: { condition: service_started }
 
   worker:
     build: .
@@ -40,12 +47,11 @@ services:
       <<: *app-env
       MODEL_SIZE: base
       CPU_THREADS: "4"
-    volumes:
-      - appdata:/data
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
+      seaweedfs: { condition: service_started }
 
 volumes:
-  appdata:
   pgdata:
+  objectdata:
