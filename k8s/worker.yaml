@@ -12,18 +12,23 @@ spec:
     metadata:
       labels: { app: worker }
     spec:
+      terminationGracePeriodSeconds: 60   # time to hand back the current job before being stopped
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         fsGroup: 1000
       containers:
         - name: worker
-          image: lecture-platform:dev
+          image: lecture-platform:v2
           imagePullPolicy: IfNotPresent
           command: ["python", "worker.py"]
+          envFrom:
+            - configMapRef: { name: app-config }
           env:
             - { name: MODEL_SIZE, value: "base" }
             - { name: CPU_THREADS, value: "4" }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: postgres-credentials, key: DATABASE_URL } }
           volumeMounts:
             - { name: appdata, mountPath: /data }
           resources:

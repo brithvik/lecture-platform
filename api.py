@@ -1,10 +1,8 @@
 """
-The API: accepts uploads and serves lecture info, transcripts, and video.
+The API: accepts uploads and serves lecture info, transcripts, video, and the web pages.
 Run:  uvicorn api:app --reload
-Then open http://localhost:8000 for the app, or http://localhost:8000/docs to test the API.
 """
 import shutil
-import time
 import uuid
 from pathlib import Path
 
@@ -13,20 +11,39 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import db
+import jobqueue
 
 STORAGE = db.DATA_DIR / "storage"
 STORAGE.mkdir(exist_ok=True)
 ALLOWED = {".mp4", ".mov", ".mkv", ".webm", ".m4a", ".mp3", ".wav"}
+PUBLIC_FIELDS = "id, title, status, attempts, duration_sec, processing_sec, error"
 
 app = FastAPI(title="Lecture API")
 db.init()
 
 
 def get_lecture(c, lecture_id):
-    row = c.execute("SELECT * FROM lectures WHERE id = ?", (lecture_id,)).fetchone()
+    row = c.execute("SELECT * FROM lectures WHERE id = %s", (lecture_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Lecture not found")
     return row
+
+
+@app.get("/healthz")
+def healthz():
+    """Liveness: the process is up. Deliberately doesn't touch the database."""
+    return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz():
+    """Readiness: only accept traffic when the database is reachable."""
+    try:
+        with db.db() as c:
+            c.execute("SELECT 1")
+    except Exception:
+        raise HTTPException(503, "Database unavailable")
+    return {"ok": True}
 
 
 @app.post("/lectures", status_code=201)
@@ -38,31 +55,32 @@ def upload_lecture(file: UploadFile = File(...)):
     lecture_id = uuid.uuid4().hex[:12]
     path = STORAGE / f"{lecture_id}{ext}"
     with open(path, "wb") as out:
-        shutil.copyfileobj(file.file, out)  # streams to disk instead of loading it all into memory
+        shutil.copyfileobj(file.file, out)
 
     with db.db() as c:
         c.execute(
-            "INSERT INTO lectures (id, title, video_path, created_at) VALUES (?, ?, ?, ?)",
-            (lecture_id, Path(file.filename).stem, str(path), time.time()),
+            "INSERT INTO lectures (id, title, video_path) VALUES (%s, %s, %s)",
+            (lecture_id, Path(file.filename).stem, str(path)),
         )
+    try:
+        jobqueue.enqueue(lecture_id)
+    except Exception as e:
+        # Not fatal: workers re-send jobs that sit queued too long, so this still gets processed
+        print(f"Could not notify queue for {lecture_id}: {e}")
     return {"id": lecture_id, "status": "queued"}
 
 
 @app.get("/lectures")
 def list_lectures():
     with db.db() as c:
-        rows = c.execute(
-            "SELECT id, title, status, duration_sec, processing_sec, error "
-            "FROM lectures ORDER BY created_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+        return c.execute(f"SELECT {PUBLIC_FIELDS} FROM lectures ORDER BY created_at DESC").fetchall()
 
 
 @app.get("/lectures/{lecture_id}")
 def lecture_status(lecture_id: str):
     with db.db() as c:
         row = get_lecture(c, lecture_id)
-    return {k: row[k] for k in ("id", "title", "status", "duration_sec", "processing_sec", "error")}
+    return {k: row[k] for k in PUBLIC_FIELDS.split(", ")}
 
 
 @app.get("/lectures/{lecture_id}/segments")
@@ -72,7 +90,7 @@ def lecture_segments(lecture_id: str):
         if row["status"] != "done":
             raise HTTPException(409, f"Transcript isn't ready yet (status: {row['status']})")
         segs = c.execute(
-            "SELECT start_sec, end_sec, text FROM segments WHERE lecture_id = ? ORDER BY idx",
+            "SELECT start_sec, end_sec, text FROM segments WHERE lecture_id = %s ORDER BY idx",
             (lecture_id,),
         ).fetchall()
     return [{"start": s["start_sec"], "end": s["end_sec"], "text": s["text"]} for s in segs]

@@ -18,22 +18,27 @@ spec:
         fsGroup: 1000
       containers:
         - name: api
-          image: lecture-platform:dev
+          image: lecture-platform:v2
           imagePullPolicy: IfNotPresent   # use the image loaded into kind, don't download
           command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:
             - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: app-config }
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: postgres-credentials, key: DATABASE_URL } }
           volumeMounts:
             - { name: appdata, mountPath: /data }
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { memory: 512Mi }
-          readinessProbe:            # only send traffic once the API answers
-            httpGet: { path: /lectures, port: 8000 }
+          readinessProbe:            # only send traffic once the API can reach the database
+            httpGet: { path: /readyz, port: 8000 }
             initialDelaySeconds: 3
             periodSeconds: 10
-          livenessProbe:             # restart the container if it stops answering
-            httpGet: { path: /lectures, port: 8000 }
+          livenessProbe:             # restart the container only if the process itself is stuck
+            httpGet: { path: /healthz, port: 8000 }
             initialDelaySeconds: 10
             periodSeconds: 20
       volumes:

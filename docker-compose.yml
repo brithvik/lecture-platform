@@ -1,22 +1,51 @@
+# Local development without Kubernetes. Same services as the cluster.
+x-app-env: &app-env
+  DATABASE_URL: postgresql://lecture:lecture@postgres:5432/lecture
+  REDIS_URL: redis://redis:6379/0
+
 services:
+  postgres:
+    image: pgvector/pgvector:pg17   # PostgreSQL with the pgvector add-on we'll use for search
+    environment:
+      POSTGRES_USER: lecture
+      POSTGRES_PASSWORD: lecture
+      POSTGRES_DB: lecture
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "lecture"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]   # no persistence needed
+
   api:
     build: .
     command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
     ports:
       - "8000:8000"
     volumes:
       - appdata:/data
-    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
 
   worker:
     build: .
     command: ["python", "worker.py"]
     environment:
-      MODEL_SIZE: base    # tiny was slower overall (more re-decoding) and less accurate
-      CPU_THREADS: "4"    # more threads than physical cores slowed things down
+      <<: *app-env
+      MODEL_SIZE: base
+      CPU_THREADS: "4"
     volumes:
-      - appdata:/data   # same volume, so the worker can read uploaded videos and the database
-    restart: unless-stopped
+      - appdata:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
 
 volumes:
   appdata:
+  pgdata:

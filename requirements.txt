@@ -4,3 +4,5 @@ uvicorn
 python-multipart
 faster-whisper==1.2.1
 av==14.2.0
+psycopg[binary]>=3.2,<4
+redis>=5,<8
