@@ -1,0 +1,32 @@
+# Autoscaling: KEDA counts unfinished jobs in PostgreSQL and runs one worker per 2 jobs (max 4).
+# It counts PostgreSQL, not Redis, on purpose: a job whose worker crashed is no longer in Redis,
+# so counting Redis could scale to zero and leave nobody to recover it.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: postgres-auth
+spec:
+  secretTargetRef:
+    - parameter: connection
+      name: postgres-credentials
+      key: DATABASE_URL
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker
+spec:
+  scaleTargetRef:
+    name: worker
+  minReplicaCount: 0        # no work, no workers
+  maxReplicaCount: 4        # a laptop limit; raise this on a bigger cluster
+  pollingInterval: 5        # check every 5 seconds
+  cooldownPeriod: 60        # wait a minute of no work before scaling to zero
+  triggers:
+    - type: postgresql
+      metadata:
+        query: "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'processing')"
+        targetQueryValue: "2"
+        activationTargetQueryValue: "0"
+      authenticationRef:
+        name: postgres-auth

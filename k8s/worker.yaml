@@ -1,12 +1,11 @@
-# The worker: transcribes queued lectures in the background.
-# No shared volume: it downloads each video from object storage, so it can run on any machine.
+# The worker: splits lectures into chunks and transcribes chunks in parallel.
+# No replica count here: KEDA (keda.yaml) decides how many workers run, from 0 up to 4.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: worker
   labels: { app: worker }
 spec:
-  replicas: 1
   selector:
     matchLabels: { app: worker }
   template:
@@ -19,7 +18,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: worker
-          image: lecture-platform:v3
+          image: lecture-platform:v4
           imagePullPolicy: IfNotPresent
           command: ["python", "worker.py"]
           envFrom:
@@ -27,9 +26,10 @@ spec:
             - secretRef: { name: storage-credentials }
           env:
             - { name: MODEL_SIZE, value: "base" }
-            - { name: CPU_THREADS, value: "4" }
+            - { name: CPU_THREADS, value: "2" }      # several small workers share the laptop's cores
+            - { name: CHUNK_SECONDS, value: "30" }   # short chunks for testing; ~120 is better for real use
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: postgres-credentials, key: DATABASE_URL } }
           resources:
-            requests: { cpu: "1", memory: 1Gi }
-            limits: { memory: 3Gi }   # stop one runaway job from eating all memory
+            requests: { cpu: 500m, memory: 768Mi }
+            limits: { memory: 2Gi }

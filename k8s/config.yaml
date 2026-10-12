@@ -9,7 +9,8 @@ stringData:
   POSTGRES_USER: lecture
   POSTGRES_PASSWORD: dev-only-password
   POSTGRES_DB: lecture
-  DATABASE_URL: postgresql://lecture:dev-only-password@postgres:5432/lecture
+  # Full address so KEDA (which runs in its own namespace) can reach it too
+  DATABASE_URL: postgresql://lecture:dev-only-password@postgres.default.svc.cluster.local:5432/lecture?sslmode=disable
 ---
 apiVersion: v1
 kind: Secret

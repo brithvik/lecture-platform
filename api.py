@@ -15,7 +15,7 @@ import jobqueue
 import storage
 
 ALLOWED = {".mp4", ".mov", ".mkv", ".webm", ".m4a", ".mp3", ".wav"}
-PUBLIC_FIELDS = "id, title, status, attempts, duration_sec, processing_sec, error"
+PUBLIC_FIELDS = "id, title, status, total_chunks, chunks_done, duration_sec, processing_sec, error"
 CHUNK = 256 * 1024
 
 app = FastAPI(title="Lecture API")
@@ -57,16 +57,18 @@ def upload_lecture(file: UploadFile = File(...)):
     key = f"videos/{lecture_id}{ext}"
     storage.upload(file.file, key, file.content_type or "application/octet-stream")
 
-    with db.db() as c:
+    job_id = f"{lecture_id}:split"
+    with db.db() as c:  # one transaction: the lecture and its first job are created together
         c.execute(
             "INSERT INTO lectures (id, title, video_key) VALUES (%s, %s, %s)",
             (lecture_id, Path(file.filename).stem, key),
         )
+        c.execute("INSERT INTO jobs (id, lecture_id, kind) VALUES (%s, %s, 'split')", (job_id, lecture_id))
     try:
-        jobqueue.enqueue(lecture_id)
+        jobqueue.enqueue(job_id)
     except Exception as e:
         # Not fatal: workers re-send jobs that sit queued too long, so this still gets processed
-        print(f"Could not notify queue for {lecture_id}: {e}")
+        print(f"Could not notify queue for {job_id}: {e}")
     return {"id": lecture_id, "status": "queued"}
 
 

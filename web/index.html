@@ -72,6 +72,13 @@
     failed: "Failed",
   };
 
+  function statusText(l) {
+    if (l.status === "processing") {
+      return l.total_chunks ? `Transcribing… ${l.chunks_done}/${l.total_chunks} chunks` : "Splitting audio…";
+    }
+    return STATUS_TEXT[l.status] || l.status;
+  }
+
   function minutes(sec) { return sec ? `${(sec / 60).toFixed(1)} min` : ""; }
 
   function escapeHtml(t) {
@@ -96,7 +103,7 @@
         }
         return `<li>
           <div><div class="title">${name}</div><div class="meta">${meta}</div></div>
-          <div class="status ${l.status}">${STATUS_TEXT[l.status] || l.status}</div>
+          <div class="status ${l.status}">${statusText(l)}</div>
         </li>`;
       }).join("");
     } catch {

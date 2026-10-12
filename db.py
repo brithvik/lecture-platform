@@ -15,27 +15,19 @@ CREATE TABLE IF NOT EXISTS lectures (
     video_key      TEXT,                              -- where the video lives in object storage
     status         TEXT NOT NULL DEFAULT 'queued',   -- queued, processing, done, failed
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    queued_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    attempts       INTEGER NOT NULL DEFAULT 0,
-    worker_id      TEXT,
-    heartbeat_at   TIMESTAMPTZ,
+    started_at     TIMESTAMPTZ,                       -- when processing began
+    total_chunks   INTEGER,                           -- set once the audio is split
+    chunks_done    INTEGER NOT NULL DEFAULT 0,
     duration_sec   DOUBLE PRECISION,
-    processing_sec DOUBLE PRECISION,
+    processing_sec DOUBLE PRECISION,                  -- upload-to-done wall clock time
     error          TEXT
 );
-CREATE INDEX IF NOT EXISTS lectures_status_idx ON lectures (status);
 
-CREATE TABLE IF NOT EXISTS segments (
-    lecture_id TEXT NOT NULL REFERENCES lectures(id) ON DELETE CASCADE,
-    idx        INTEGER NOT NULL,
-    start_sec  DOUBLE PRECISION NOT NULL,
-    end_sec    DOUBLE PRECISION NOT NULL,
-    text       TEXT NOT NULL,
-    PRIMARY KEY (lecture_id, idx)
-);
-
--- Migration from the shared-folder version: add video_key, make the old video_path optional
+-- Upgrades for tables created by earlier versions
 ALTER TABLE lectures ADD COLUMN IF NOT EXISTS video_key TEXT;
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS total_chunks INTEGER;
+ALTER TABLE lectures ADD COLUMN IF NOT EXISTS chunks_done INTEGER NOT NULL DEFAULT 0;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns
@@ -43,6 +35,34 @@ BEGIN
         ALTER TABLE lectures ALTER COLUMN video_path DROP NOT NULL;
     END IF;
 END $$;
+
+-- Every unit of work: one "split" job per lecture, then one "chunk" job per piece of audio
+CREATE TABLE IF NOT EXISTS jobs (
+    id             TEXT PRIMARY KEY,                  -- e.g. "abc123:split" or "abc123:chunk:7"
+    lecture_id     TEXT NOT NULL REFERENCES lectures(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL,                     -- split or chunk
+    chunk_idx      INTEGER,
+    start_sec      DOUBLE PRECISION,                  -- where this chunk sits in the lecture
+    end_sec        DOUBLE PRECISION,
+    audio_key      TEXT,                              -- the chunk's audio in object storage
+    status         TEXT NOT NULL DEFAULT 'queued',   -- queued, processing, done, failed
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    worker_id      TEXT,
+    heartbeat_at   TIMESTAMPTZ,
+    queued_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    processing_sec DOUBLE PRECISION,
+    error          TEXT
+);
+CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs (status);
+
+CREATE TABLE IF NOT EXISTS segments (
+    lecture_id TEXT NOT NULL REFERENCES lectures(id) ON DELETE CASCADE,
+    idx        INTEGER NOT NULL,                      -- chunk number * 100000 + position in chunk
+    start_sec  DOUBLE PRECISION NOT NULL,
+    end_sec    DOUBLE PRECISION NOT NULL,
+    text       TEXT NOT NULL,
+    PRIMARY KEY (lecture_id, idx)
+);
 """
 
 
