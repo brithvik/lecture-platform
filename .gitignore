@@ -14,3 +14,10 @@ storage/
 
 # Secrets
 .env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+terraform/*-config
