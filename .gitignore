@@ -21,3 +21,4 @@ storage/
 *.tfstate.*
 crash.log
 terraform/*-config
+terraform/**/*-config
